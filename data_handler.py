@@ -1,25 +1,30 @@
 import pandas as pd
 from datetime import datetime
+from config import Config  # Импортируем конфигурацию
 
 
 class DataHandler:
     def __init__(self):
         self.data = None
         self.forecast = None
-        self.required_columns = {'date', 'value'}  # Обязательные столбцы
+        self.required_columns = Config.REQUIRED_COLUMNS  # Из конфига
 
     def load_data(self, file_path):
         """
-        Загружает данные из файла с валидацией
+        Загружает и валидирует данные с учетом конфигурации
 
         Args:
-            file_path: Путь к файлу (CSV/Excel)
+            file_path: Путь к файлу
 
         Returns:
-            bool: True при успешной загрузке, иначе False
+            bool: True при успешной загрузке
         """
         try:
-            # Определение типа файла
+            # Определяем формат файла из конфига
+            if not any(file_path.endswith(ext[1]) for ext in Config.SUPPORTED_FORMATS):
+                raise ValueError("Неподдерживаемый формат файла")
+
+            # Загрузка данных
             if file_path.endswith('.csv'):
                 df = pd.read_csv(file_path)
             elif file_path.endswith('.xlsx'):
@@ -31,12 +36,14 @@ class DataHandler:
             if not self.validate_data(df):
                 return False
 
-            # Преобразование даты
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            df = df.dropna(subset=['date', 'value'])
-            df = df.set_index('date').sort_index()
+            # Обработка временного индекса
+            if Config.DATE_COLUMN in df.columns:
+                df[Config.DATE_COLUMN] = pd.to_datetime(df[Config.DATE_COLUMN], errors='coerce')
+                df = df.dropna(subset=[Config.DATE_COLUMN, Config.VALUE_COLUMN])
+                df = df.set_index(Config.DATE_COLUMN).sort_index()
+                df.index.freq = Config.INFER_FREQ  # Установка частоты из конфига
 
-            self.data = df
+            self.data = df[[Config.VALUE_COLUMN]].rename(columns={Config.VALUE_COLUMN: 'value'})
             return True
 
         except Exception as e:
@@ -45,7 +52,7 @@ class DataHandler:
 
     def validate_data(self, df):
         """
-        Проверяет корректность структуры данных
+        Проверяет данные согласно конфигурации
 
         Args:
             df: DataFrame для проверки
@@ -53,24 +60,24 @@ class DataHandler:
         Returns:
             bool: Результат валидации
         """
-        # Проверка наличия обязательных столбцов
-        if not self.required_columns.issubset(df.columns):
-            missing = self.required_columns - set(df.columns)
-            raise ValueError(f"Отсутствуют обязательные столбцы: {missing}")
+        # Проверка обязательных столбцов
+        missing_cols = self.required_columns - set(df.columns)
+        if missing_cols:
+            raise ValueError(f"Отсутствуют обязательные столбцы: {', '.join(missing_cols)}")
 
-        # Проверка наличия данных
+        # Проверка пустых данных
         if df.empty:
             raise ValueError("Файл не содержит данных")
 
         # Проверка числовых значений
-        if not pd.api.types.is_numeric_dtype(df['value']):
-            raise TypeError("Столбец 'value' должен содержать числовые значения")
+        if not pd.api.types.is_numeric_dtype(df[Config.VALUE_COLUMN]):
+            raise TypeError(f"Столбец '{Config.VALUE_COLUMN}' должен содержать числовые значения")
 
         return True
 
     def save_data(self, file_path):
         """
-        Сохраняет прогноз в файл
+        Сохраняет прогноз с учетом формата из конфига
 
         Args:
             file_path: Путь для сохранения
@@ -81,13 +88,18 @@ class DataHandler:
         if self.forecast is None:
             raise ValueError("Нет данных для экспорта")
 
-        # Определение формата файла
-        if file_path.endswith('.csv'):
-            self.forecast.to_csv(file_path, index=False)
-        elif file_path.endswith('.xlsx'):
-            self.forecast.to_excel(file_path, index=False, engine='openpyxl')
-        else:
-            raise ValueError("Неподдерживаемый формат файла")
+        # Определяем формат по расширению из конфига
+        try:
+            if file_path.endswith('.csv'):
+                self.forecast.to_csv(file_path, index=False)
+            elif file_path.endswith('.xlsx'):
+                self.forecast.to_excel(file_path, index=False, engine='openpyxl')
+            elif file_path.endswith('.png'):
+                self.forecast.plot().get_figure().savefig(file_path)
+            else:
+                raise ValueError("Неподдерживаемый формат файла")
+        except Exception as e:
+            raise IOError(f"Ошибка сохранения: {str(e)}")
 
     def prepare_forecast_data(self, forecast_series):
         """
@@ -97,4 +109,4 @@ class DataHandler:
             forecast_series: Series с прогнозом
         """
         self.forecast = forecast_series.reset_index()
-        self.forecast.columns = ['date', 'forecast_value']
+        self.forecast.columns = [Config.DATE_COLUMN, Config.FORECAST_COLUMN]
